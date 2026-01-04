@@ -1,0 +1,82 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: reales_bot_db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-reales_bot}
+      POSTGRES_USER: ${DB_USER:-reales_bot}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-reales_bot}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-reales_bot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - reales_network
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reales_bot
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - ADMINS=${ADMINS}
+      - DB_TYPE=${DB_TYPE:-postgres}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-reales_bot}
+      - DB_USER=${DB_USER:-reales_bot}
+      - DB_PASSWORD=${DB_PASSWORD:-reales_bot}
+    volumes:
+      - ./migration:/app/migration
+      - ./alembic.ini:/app/alembic.ini
+      - ./.env:/app/.env
+    entrypoint: ["/app/docker-entrypoint.sh"]
+    command: ["python", "main.py"]
+    restart: unless-stopped
+    networks:
+      - reales_network
+
+  rss:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reales_bot_rss
+    depends_on:
+      db:
+        condition: service_healthy
+      bot:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - DB_TYPE=${DB_TYPE:-postgres}
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-reales_bot}
+      - DB_USER=${DB_USER:-reales_bot}
+      - DB_PASSWORD=${DB_PASSWORD:-reales_bot}
+    volumes:
+      - ./migration:/app/migration
+      - ./alembic.ini:/app/alembic.ini
+      - ./.env:/app/.env
+    entrypoint: ["/app/docker-entrypoint.sh"]
+    command: ["python", "-m", "rss.main"]
+    restart: unless-stopped
+    networks:
+      - reales_network
+
+networks:
+  reales_network:
+    driver: bridge
+
+
