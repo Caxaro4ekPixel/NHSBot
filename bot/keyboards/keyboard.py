@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.database import get_all_users
+from bot.repositories.database import get_all_users
 
 
 def build_keyboard(items, selected_ids):

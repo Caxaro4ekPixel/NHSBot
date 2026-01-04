@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import json
 
 from bot.models import Release, ReleaseAssignment, SentEpisode, User, UserRole, async_session_maker
-from bot.logger import get_logger
+from bot.core.logger import get_logger
 
 logger = get_logger(__name__)
 

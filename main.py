@@ -1,31 +1,23 @@
 import asyncio
-import io
-import logging
-import sys
 import os
-import traceback
-import re
-from typing import Any, Dict
-
-from PIL import Image
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, BufferedInputFile, Update
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.dispatcher.middlewares.base import BaseMiddleware
-
-from bot.service import users_with, load_reales, fmt_users, save_assignment, mention_html, collect_member_ids, \
+from bot.middleware.logging import LoggingMiddleware
+from bot.services.service import users_with, load_reales, fmt_users, save_assignment, mention_html, collect_member_ids, \
     build_chat_title, load_assignment, search_reales, download_bytes, add_release, update_release_chat_id
-from bot.state import RealesState, SetReales
-from bot.keyboard import build_keyboard, kb_multi, kb_releases, kb_single, kb_set_releases
-from bot.shikimori import fetch_shikimori_releases, extract_anime_id_from_url, fetch_anime_by_id
+from bot.core.state import RealesState, SetReales
+from bot.keyboards.keyboard import build_keyboard, kb_multi, kb_releases, kb_single, kb_set_releases
+from bot.api.shikimori import fetch_shikimori_releases, extract_anime_id_from_url, fetch_anime_by_id
 from bot.models import init_db
-from bot.database import complete_release, update_release_from_shikimori, update_release_search_prefix, migrate_users_from_file
-from bot.logger import setup_logging, get_logger
+from bot.repositories.database import complete_release, update_release_from_shikimori, update_release_search_prefix, migrate_users_from_file
+from bot.core.logger import setup_logging, get_logger
+from bot.utils.subtitle_converter import convert_ass_to_srt
 
 setup_logging()
 logger = get_logger(__name__)
@@ -42,65 +34,7 @@ dp.include_router(router)
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
-
-class LoggingMiddleware(BaseMiddleware):
-    async def __call__(
-        self,
-        handler,
-        event,
-        data: Dict[str, Any],
-    ) -> Any:
-        user_id = None
-        username = None
-        chat_id = None
-        chat_type = None
-        action = None
-        
-        if isinstance(event, Message):
-            user_id = event.from_user.id if event.from_user else None
-            username = event.from_user.username if event.from_user else None
-            chat_id = event.chat.id
-            chat_type = event.chat.type
-            if event.text:
-                action = f"message: {event.text[:100]}"
-            elif event.caption:
-                action = f"message with caption: {event.caption[:100]}"
-        elif isinstance(event, CallbackQuery):
-            user_id = event.from_user.id if event.from_user else None
-            username = event.from_user.username if event.from_user else None
-            chat_id = event.message.chat.id if event.message else None
-            chat_type = event.message.chat.type if event.message else None
-            action = f"callback: {event.data}"
-        elif isinstance(event, Update):
-            if event.message:
-                user_id = event.message.from_user.id if event.message.from_user else None
-                username = event.message.from_user.username if event.message.from_user else None
-                chat_id = event.message.chat.id
-                chat_type = event.message.chat.type
-                if event.message.text:
-                    action = f"message: {event.message.text[:100]}"
-                elif event.message.caption:
-                    action = f"message with caption: {event.message.caption[:100]}"
-            elif event.callback_query:
-                user_id = event.callback_query.from_user.id if event.callback_query.from_user else None
-                username = event.callback_query.from_user.username if event.callback_query.from_user else None
-                chat_id = event.callback_query.message.chat.id if event.callback_query.message else None
-                chat_type = event.callback_query.message.chat.type if event.callback_query.message else None
-                action = f"callback: {event.callback_query.data}"
-        
-        if user_id:
-            logger.info(f"USER ACTION | user_id={user_id} | username=@{username} | chat_id={chat_id} | chat_type={chat_type} | {action}")
-        
-        try:
-            result = await handler(event, data)
-            return result
-        except Exception as e:
-            error_msg = f"ERROR | user_id={user_id} | username=@{username} | chat_id={chat_id} | {action} | {type(e).__name__}: {str(e)}"
-            logger.error(error_msg)
-            logger.error(traceback.format_exc())
-            raise
-
-
+# Register middleware
 dp.message.middleware(LoggingMiddleware())
 dp.callback_query.middleware(LoggingMiddleware())
 
@@ -755,114 +689,6 @@ async def command_set_prefix_handler(message: Message) -> None:
         await message.answer(f"✅ Префикс поиска обновлен:\n<b>{name_ru}</b>\nID: {release_id}\nПрефикс: <code>{prefix}</code>")
     else:
         await message.answer(f"Ошибка при обновлении префикса для релиза {release_id}")
-
-
-def _parse_text(element) -> str:
-    text = ','.join(element['text']).strip().replace("\\N", " ").replace("  ", " ")
-    
-    if text.startswith('—'):
-        text = text.replace("—", "").strip()
-
-    if element['fx']: 
-        text = f"[{text}]"
-    else:
-        tags = ("\\fn", "\\shad", "\\bord", "\\fade", "\\move", "\\pos", "\\fsc")
-        for tag in tags:
-            if tag in text:
-                text = f"[{text}]"
-                break
-    
-    if element['name'] != '' and element['name'] not in ['НАДПИСЬ', 'Надпись']:
-        text = f"({element['name']}) {text}"
-
-    return re.sub(r'{.*?}', '', text)
-
-
-def _sort_by_time(parsed_lines):
-    return parsed_lines['start']
-
-
-def convert_ass_to_srt(file_in_bytes: bytes, file_name: str) -> BufferedInputFile:
-    """Convert ASS subtitle file to SRT format"""
-    try:
-        raw_lines = file_in_bytes.decode('utf-8').split('\n')
-    except UnicodeDecodeError:
-        try:
-            raw_lines = file_in_bytes.decode('utf-8-sig').split('\n')
-        except UnicodeDecodeError:
-            raw_lines = file_in_bytes.decode('latin-1').split('\n')
-    
-    lines = [line for line in raw_lines if line.startswith('Dialogue: ')]
-
-    parsed_lines = []
-    for line in lines:
-        l = line.split(',', 9)
-        if len(l) < 10:
-            continue
-        parsed_lines.append({
-            'start': l[1].replace(".", ",").strip(), 
-            'end': l[2].replace(".", ",").strip(),
-            'name': l[4].strip() if len(l) > 4 else '',
-            'fx': l[8].strip() if len(l) > 8 else '',
-            'text': [l[9]] if len(l) > 9 else []
-        })
-    
-    if not parsed_lines:
-        raise ValueError("No dialogue lines found in ASS file")
-    
-    parsed_lines.sort(key=_sort_by_time)
-
-    _del = []
-    for i, line in enumerate(parsed_lines):
-        text = parsed_lines[i]['text'] = _parse_text(line)
-        start = line['start']
-        end = line['end']
-
-        if i > 0:
-            if parsed_lines[i] == parsed_lines[i-1]:
-                _del.append(i)
-
-    parsed_lines = [i for j, i in enumerate(parsed_lines) if j not in _del]
-
-    srt_events = []
-    i = 0
-    while i < len(parsed_lines):
-        element = parsed_lines[i]
-        start = element['start']
-        end = element['end']
-        text = element['text']
-        
-        while i < len(parsed_lines) - 1:
-            next_element = parsed_lines[i + 1]
-            next_start = next_element['start']
-            next_end = next_element['end']
-            next_text = next_element['text']
-
-            if end > next_start and text != next_text:
-                if '[' not in next_text:
-                    text += '\n—' + next_text
-                else: 
-                    text += '\n' + next_text
-                end = next_end
-                i += 1
-            else:
-                break          
-
-        srt_events.append((start, end, text))
-        i += 1
-
-    srt_text = "\n".join([
-            f"{i}\n{start} --> {end}\n{text}\n" 
-            for i, (start, end, text) 
-            in enumerate(srt_events, 1)
-        ])
-    
-    f_bytes = io.BytesIO()
-    f_bytes.write(bytes(srt_text, 'utf-8'))
-    filename = file_name.replace('.ass', '.srt').replace('.ASS', '.srt')
-    f_bytes.seek(0)
-    file = BufferedInputFile(f_bytes.read(), filename)
-    return file
 
 
 @router.message(Command("srt"))

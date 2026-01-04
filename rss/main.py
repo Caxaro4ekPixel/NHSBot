@@ -14,7 +14,7 @@ from difflib import SequenceMatcher
 from typing import Dict, Tuple, Optional, List
 from aiogram.types import BufferedInputFile
 
-from bot.logger import setup_logging, get_logger
+from bot.core.logger import setup_logging, get_logger
 
 setup_logging()
 logger = get_logger(__name__)
@@ -22,11 +22,11 @@ logger = get_logger(__name__)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bot.models import init_db
-from bot.database import (
+from bot.repositories.database import (
     get_incomplete_releases_with_chat, update_release_from_shikimori,
     is_episode_sent, mark_episode_sent, is_episode_fully_sent, is_page_link_seen
 )
-from bot.shikimori import fetch_anime_by_id
+from bot.api.shikimori import fetch_anime_by_id
 
 load_dotenv(".env")
 TOKEN = os.getenv("BOT_TOKEN")
@@ -270,7 +270,7 @@ def find_best_match(entry_title: str, catalog: List[dict]) -> Optional[dict]:
 
 
 async def process_feed(catalog: List[dict], poll_id: int, http) -> None:
-    logger.debug(f"Fetching RSS feed from {URL}")
+    logger.info(f"Fetching RSS feed from {URL}")
     feed = feedparser.parse(URL)
     status = getattr(feed, "status", None)
     if status != 200:

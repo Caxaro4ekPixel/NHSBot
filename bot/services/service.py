@@ -4,13 +4,13 @@ from typing import List
 
 import aiohttp
 
-from bot.database import (
+from bot.repositories.database import (
     get_all_releases, get_release, add_release as db_add_release,
     save_assignment as db_save_assignment, get_assignment as db_get_assignment,
     search_releases as db_search_releases, update_release_chat_id as db_update_release_chat_id,
     get_all_users, get_users_by_role, get_user
 )
-from bot.logger import get_logger
+from bot.core.logger import get_logger
 
 logger = get_logger(__name__)
 

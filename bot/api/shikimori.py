@@ -3,7 +3,7 @@ from typing import Dict, List, Optional
 import aiohttp
 import re
 
-from bot.logger import get_logger
+from bot.core.logger import get_logger
 
 logger = get_logger(__name__)
 
