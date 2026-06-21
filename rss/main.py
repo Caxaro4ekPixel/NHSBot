@@ -2,13 +2,14 @@ import os
 import sys
 import aiohttp
 import traceback
+import asyncio
+import re
 from pathlib import Path
+from urllib.parse import quote
 from dotenv import load_dotenv
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-import asyncio
-import re
 import feedparser
 from difflib import SequenceMatcher
 from typing import Dict, Tuple, Optional, List
@@ -23,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bot.models import init_db
 from bot.repositories.database import (
-    get_incomplete_releases_with_chat, update_release_from_shikimori,
+    get_incomplete_releases_with_chat, get_release, update_release_from_shikimori,
     is_episode_sent, mark_episode_sent, is_episode_fully_sent, is_page_link_seen
 )
 from bot.api.shikimori import fetch_anime_by_id
@@ -33,11 +34,11 @@ TOKEN = os.getenv("BOT_TOKEN")
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
-URL = "https://nyaa.si/?page=rss&c=1_2&q=Erai-raws"
+RSS_BASE_URL = "https://nyaa.si/?page=rss&c=1_2"
 
 SIM_THRESHOLD = 0.70
 REQUIRED_QUALITIES = {480, 1080}
-POLL_INTERVAL = 300
+POLL_INTERVAL = 360
 
 
 def similarity(a: str, b: str) -> float:
@@ -136,22 +137,18 @@ def format_telegram_message(anime: dict, episode: int, qualities: dict, complete
     if title_ru:
         lines.append(f"🇷🇺 <i>{title_ru}</i>")
     lines.append(f"📺 <b>Серия {episode:02d}</b>")
+
+    magnets = [
+        (q, qualities[q]["magnet"])
+        for q in sorted(qualities.keys())
+        if qualities[q].get("magnet")
+    ]
+    if magnets:
+        lines.append("")
+        for q, magnet in magnets:
+            lines.append(f"🔗 <b>{q}p</b>: <code>{magnet}</code>")
+
     lines.append("")
-    lines.append("🧲 <b>Magnet-ссылки:</b>")
-
-    for q in sorted(qualities.keys()):
-        magnet = qualities[q].get("magnet")
-        if magnet:
-            lines.append(f"• <b>{q}p</b> — <a href=\"{magnet}\">magnet</a>")
-        else:
-            lines.append(f"• <b>{q}p</b> — <i>magnet не найден</i>")
-
-    lines.append("")
-    if complete:
-        lines.append("✅ <b>Полный набор качеств</b>")
-    else:
-        lines.append("⚠️ <i>Отправлено не полностью (2 проверки RSS)</i>")
-
     return "\n".join(lines)
 
 
@@ -269,107 +266,128 @@ def find_best_match(entry_title: str, catalog: List[dict]) -> Optional[dict]:
     return best if (best and best_score >= SIM_THRESHOLD) else None
 
 
-async def process_feed(catalog: List[dict], poll_id: int, http) -> None:
-    logger.info(f"Fetching RSS feed from {URL}")
-    feed = feedparser.parse(URL)
-    status = getattr(feed, "status", None)
-    if status != 200:
-        logger.warning(f"Failed to get rss feed. Status code: {status}")
-        return
+def build_rss_url(search_query: str) -> str:
+    encoded_query = quote(search_query)
+    return f"{RSS_BASE_URL}&q={encoded_query}"
+
+
+async def process_feed(catalog: List[dict], http) -> None:
+    total_episodes_found = 0
     
-    entries_count = len(feed.entries) if hasattr(feed, 'entries') else 0
-    logger.info(f"RSS feed fetched: {entries_count} entries found")
-
-    episode_qualities: Dict[Tuple[int, int], Dict[int, Dict[str, str]]] = {}
-
-    for entry in feed.entries:
-        title = getattr(entry, "title", "") or ""
-        page_link = getattr(entry, "link", "") or ""
-
-        if not title or not page_link:
+    for anime in catalog:
+        anime_id = int(anime.get("id", -1))
+        if anime_id == -1:
             continue
-
-        if await is_page_link_seen(page_link):
-            logger.debug(f"Skipping already seen entry: {title[:60]}")
-            continue
-
-        q = extract_quality(title)
-        ep = extract_episode(title)
-        if q is None or ep is None:
-            logger.debug(f"Skipping entry (no quality/episode): {title[:60]}")
-            continue
-
-        anime = find_best_match(title, catalog)
-        if not anime:
-            logger.debug(f"No match found for entry: {title[:60]}")
-            continue
-        
-        logger.debug(f"Matched entry '{title[:60]}' to anime ID {anime['id']} (ep{ep}, {q}p)")
-
-        torrent_url, magnet = extract_torrent_and_magnet(entry)
-
-        anime_id = int(anime["id"])
+            
         chat_id = anime.get("chat_id")
         if not chat_id:
-            continue
-
-        key = (anime_id, ep)
-        if key not in episode_qualities:
-            episode_qualities[key] = {}
-
-        if q not in episode_qualities[key]:
-            episode_qualities[key][q] = {
-                "title": title,
-                "page_link": page_link,
-                "torrent_url": torrent_url,
-                "magnet": magnet,
-            }
-
-    logger.info(f"Processing {len(episode_qualities)} episode(s) found in RSS feed")
-    
-    for (anime_id, ep), qualities in episode_qualities.items():
-        anime = next((x for x in catalog if int(x.get("id", -1)) == anime_id), None)
-        if not anime or anime.get("is_completed", False):
-            if not anime:
-                logger.warning(f"Anime ID {anime_id} not found in catalog")
-            else:
-                logger.debug(f"Anime ID {anime_id} is completed, skipping")
+            logger.debug(f"Skipping anime ID {anime_id}: no chat_id")
             continue
         
-        chat_id = anime.get("chat_id")
-        if not chat_id:
-            logger.warning(f"Anime ID {anime_id} has no chat_id, skipping")
+        search_prefix = anime.get("search_prefix") or ""
+        search_prefix = search_prefix.strip() if search_prefix else ""
+        name = anime.get("name") or ""
+        name = name.strip() if name else ""
+        
+        if not name:
+            logger.warning(f"Skipping anime ID {anime_id}: no name")
             continue
-
-        if REQUIRED_QUALITIES.issubset(set(qualities.keys())):
-            if not await is_episode_fully_sent(anime_id, ep, REQUIRED_QUALITIES):
-                logger.info(f"🎯 Found complete episode: {anime.get('name_ru') or anime.get('name', f'ID {anime_id}')} ep{ep} (qualities: {list(qualities.keys())})")
-                await send_to_telegram(anime, ep, qualities, complete=True, chat_id=chat_id, http=http)
-                
-                for q in REQUIRED_QUALITIES:
-                    torrent_url = qualities[q].get("torrent_url")
-                    magnet = qualities[q].get("magnet")
-                    page_link = qualities[q].get("page_link")
-                    await mark_episode_sent(anime_id, ep, q, torrent_url, magnet, page_link)
-            else:
-                logger.debug(f"Episode {anime_id} ep{ep} already fully sent, skipping")
+        
+        if search_prefix:
+            search_query = f"{search_prefix} {name}"
         else:
-            missing = REQUIRED_QUALITIES - set(qualities.keys())
-            logger.debug(f"Episode {anime_id} ep{ep} incomplete: missing qualities {missing} (have: {list(qualities.keys())})")
+            search_query = name
+        
+        rss_url = build_rss_url(search_query)
+        anime_name = anime.get("name_ru") or anime.get("name", f"ID {anime_id}")
+        logger.info(f"🔍 Fetching RSS for: {anime_name} (query: {search_query})")
+        
+        try:
+            feed = feedparser.parse(rss_url)
+            status = getattr(feed, "status", None)
+            if status != 200:
+                logger.warning(f"Failed to get RSS feed for {anime_name}. Status code: {status}")
+                continue
+            
+            entries_count = len(feed.entries) if hasattr(feed, 'entries') else 0
+            logger.debug(f"RSS feed for {anime_name}: {entries_count} entries found")
+            
+            episode_qualities: Dict[Tuple[int, int], Dict[int, Dict[str, str]]] = {}
+            
+            for entry in feed.entries:
+                title = getattr(entry, "title", "") or ""
+                page_link = getattr(entry, "link", "") or ""
+                
+                if not title or not page_link:
+                    continue
+                
+                if await is_page_link_seen(page_link):
+                    logger.debug(f"Skipping already seen entry: {title[:60]}")
+                    continue
+                
+                q = extract_quality(title)
+                ep = extract_episode(title)
+                if q is None or ep is None:
+                    logger.debug(f"Skipping entry (no quality/episode): {title[:60]}")
+                    continue
+                
+                if not find_best_match(title, [anime]):
+                    logger.debug(f"Entry doesn't match {anime_name}: {title[:60]}")
+                    continue
+                
+                logger.debug(f"Matched entry '{title[:60]}' to {anime_name} (ep{ep}, {q}p)")
+                
+                torrent_url, magnet = extract_torrent_and_magnet(entry)
+                
+                key = (anime_id, ep)
+                if key not in episode_qualities:
+                    episode_qualities[key] = {}
+                
+                if q not in episode_qualities[key]:
+                    episode_qualities[key][q] = {
+                        "title": title,
+                        "page_link": page_link,
+                        "torrent_url": torrent_url,
+                        "magnet": magnet,
+                    }
+            
+            for (ep_anime_id, ep), qualities in episode_qualities.items():
+                if ep_anime_id != anime_id:
+                    continue
+                
+                if REQUIRED_QUALITIES.issubset(set(qualities.keys())):
+                    if not await is_episode_fully_sent(anime_id, ep, REQUIRED_QUALITIES):
+                        logger.info(f"🎯 Found complete episode: {anime_name} ep{ep} (qualities: {list(qualities.keys())})")
+                        await send_to_telegram(anime, ep, qualities, complete=True, chat_id=chat_id, http=http)
+                        
+                        for q in REQUIRED_QUALITIES:
+                            torrent_url = qualities[q].get("torrent_url")
+                            magnet = qualities[q].get("magnet")
+                            page_link = qualities[q].get("page_link")
+                            await mark_episode_sent(anime_id, ep, q, torrent_url, magnet, page_link)
+                        total_episodes_found += 1
+                    else:
+                        logger.debug(f"Episode {anime_name} ep{ep} already fully sent, skipping")
+                else:
+                    missing = REQUIRED_QUALITIES - set(qualities.keys())
+                    logger.debug(f"Episode {anime_name} ep{ep} incomplete: missing qualities {missing} (have: {list(qualities.keys())})")
+        
+        except Exception as e:
+            logger.error(f"Error processing RSS for {anime_name}: {e}", exc_info=True)
+            continue
+    
+    logger.info(f"✅ Finished processing RSS feed: found {total_episodes_found} new complete episode(s)")
 
 
 async def rss_watcher() -> None:
     logger.info("🚀 RSS watcher starting...")
     await init_db()
     logger.info("✅ Database initialized")
-    
-    poll_id = 0
 
     try:
         async with aiohttp.ClientSession() as http:
             while True:
-                poll_id += 1
-                logger.info(f"[poll #{poll_id}] checking RSS...")
+                logger.info(f"checking RSS...")
                 try:
                     catalog = await get_incomplete_releases_with_chat()
                     
@@ -377,7 +395,8 @@ async def rss_watcher() -> None:
                         logger.info("No incomplete releases with chat_id found")
                     else:
                         logger.info(f"Found {len(catalog)} incomplete releases to track")
-                        
+                        release_ids_this_cycle = [r["id"] for r in catalog]
+
                         updated_count = 0
                         for release in catalog:
                             try:
@@ -387,13 +406,18 @@ async def rss_watcher() -> None:
                                     updated_count += 1
                             except Exception as e:
                                 logger.error(f"Error updating release {release['id']}: {e}", exc_info=True)
-                        
+
                         logger.info(f"Updated {updated_count}/{len(catalog)} releases from Shikimori")
-                        
-                        catalog = await get_incomplete_releases_with_chat()
-                        logger.info(f"Processing RSS feed for {len(catalog)} releases...")
-                        await process_feed(catalog, poll_id=poll_id, http=http)
-                        logger.info(f"Finished processing RSS feed (poll #{poll_id})")
+
+                        catalog_for_rss = []
+                        for rid in release_ids_this_cycle:
+                            row = await get_release(rid)
+                            if row and row.get("chat_id"):
+                                catalog_for_rss.append(row)
+
+                        logger.info(f"Processing RSS feed for {len(catalog_for_rss)} releases...")
+                        await process_feed(catalog_for_rss, http=http)
+                        logger.info(f"Finished processing RSS feed")
                 except Exception as e:
                     logger.error(f"Error while processing feed: {e}", exc_info=True)
                     logger.error(f"Traceback: {traceback.format_exc()}")

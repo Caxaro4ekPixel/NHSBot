@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gcc \
     python3-dev \
+    ffmpeg \
+    mkvtoolnix \
+    p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

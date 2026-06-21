@@ -118,7 +118,8 @@ class User(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
     
     assignments = relationship("ReleaseAssignment", back_populates="user")
-    
+    channel_url = Column(String, nullable=True)
+
     def to_dict(self) -> Dict:
         import json
         roles_list = []
@@ -136,6 +137,52 @@ class User(Base):
             "role": roles_list
         }
 
+
+
+class ReleaseTopic(Base):
+    __tablename__ = "release_topics"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    release_id = Column(Integer, ForeignKey("releases.id"), nullable=False)
+    group_id = Column(BigInteger, nullable=False)
+    topic_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+    __table_args__ = (
+        Index("idx_release_topics_group_topic", "group_id", "topic_id", unique=True),
+    )
+
+
+class TopicFile(Base):
+    __tablename__ = "topic_files"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    release_id = Column(Integer, ForeignKey("releases.id"), nullable=False)
+    group_id = Column(BigInteger, nullable=False)
+    topic_id = Column(Integer, nullable=False)
+    message_id = Column(Integer, nullable=False)
+    file_type = Column(String, nullable=False)
+    file_id = Column(String, nullable=False)
+    file_name = Column(String, nullable=True)
+    file_size = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    __table_args__ = (
+        Index("idx_topic_files_release_topic", "release_id", "topic_id"),
+    )
+
+
+class ReleasePost(Base):
+    __tablename__ = "release_posts"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    release_id = Column(Integer, ForeignKey("releases.id"), nullable=False)
+    episode = Column(Integer, nullable=False)
+    group_id = Column(BigInteger, nullable=True)
+    topic_id = Column(Integer, nullable=True)
+    group_mp4_message_id = Column(Integer, nullable=True)
+    group_mkv_message_id = Column(Integer, nullable=True)
+    channel_id = Column(BigInteger, nullable=True)
+    channel_message_id = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=func.now())
+    __table_args__ = (
+        Index("idx_release_posts_release_episode", "release_id", "episode"),
+    )
 
 
 async def get_session() -> AsyncSession:

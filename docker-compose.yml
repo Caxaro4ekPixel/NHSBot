@@ -8,6 +8,8 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-reales_bot}
     ports:
       - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-reales_bot}"]
       interval: 5s
@@ -15,6 +17,19 @@ services:
       retries: 5
     networks:
       - reales_network
+
+  localapi:
+    image: aiogram/telegram-bot-api:latest
+    container_name: reales_bot_localapi
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_LOCAL: 1
+    volumes:
+      - localapi_data:/var/lib/telegram-bot-api
+    networks:
+      - reales_network
+    restart: unless-stopped
 
   bot:
     build:
@@ -24,6 +39,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      localapi:
+        condition: service_started
     env_file:
       - .env
     environment:
@@ -35,10 +52,15 @@ services:
       - DB_NAME=${DB_NAME:-reales_bot}
       - DB_USER=${DB_USER:-reales_bot}
       - DB_PASSWORD=${DB_PASSWORD:-reales_bot}
+      - LOCAL_API_URL=http://localapi:8081
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
     volumes:
       - ./migration:/app/migration
       - ./alembic.ini:/app/alembic.ini
       - ./.env:/app/.env
+      - localapi_data:/var/lib/telegram-bot-api:ro
+      - covers_data:/app/covers
     entrypoint: ["/app/docker-entrypoint.sh"]
     command: ["python", "main.py"]
     restart: unless-stopped
@@ -78,5 +100,10 @@ services:
 networks:
   reales_network:
     driver: bridge
+
+volumes:
+  postgres_data:
+  localapi_data:
+  covers_data:
 
 

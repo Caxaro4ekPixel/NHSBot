@@ -1,4 +1,8 @@
 .env
 .idea
 .venv
+.claude
 __pycache__
+backups/
+
+setup_session.session

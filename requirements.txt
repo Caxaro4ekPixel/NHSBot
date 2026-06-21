@@ -22,6 +22,7 @@ psycopg2==2.9.11
 pydantic==2.12.5
 pydantic_core==2.41.5
 python-dotenv==1.2.1
+telethon==1.36.0
 sgmllib3k==1.0.0
 SQLAlchemy==2.0.45
 typing-inspection==0.4.2
