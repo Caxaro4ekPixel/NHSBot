@@ -1,4 +1,3 @@
-"""DB functions for publishing pipeline."""
 from typing import Optional, Dict, List
 from sqlalchemy import select, and_, desc
 from bot.models import ReleaseTopic, TopicFile, ReleasePost, User, ReleaseAssignment, Release, async_session_maker
@@ -108,6 +107,26 @@ async def save_release_post(
             channel_id=channel_id,
             channel_message_id=channel_msg_id,
         ))
+        await session.commit()
+        return True
+
+
+async def set_release_tags(release_id: int, tags: str) -> bool:
+    async with async_session_maker() as session:
+        release = await session.get(Release, release_id)
+        if not release:
+            return False
+        release.custom_tags = tags
+        await session.commit()
+        return True
+
+
+async def set_release_file_prefix(release_id: int, prefix: str) -> bool:
+    async with async_session_maker() as session:
+        release = await session.get(Release, release_id)
+        if not release:
+            return False
+        release.file_prefix = prefix
         await session.commit()
         return True
 

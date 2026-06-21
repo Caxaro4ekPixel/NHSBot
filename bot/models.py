@@ -36,6 +36,8 @@ class Release(Base):
     released_on = Column(String)
     chat_id = Column(BigInteger, nullable=True)
     search_prefix = Column(String, default="[Erai-raws]")
+    custom_tags = Column(String, nullable=True)
+    file_prefix = Column(String, nullable=True)
     is_completed = Column(Boolean, default=False)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=func.now())
@@ -64,6 +66,8 @@ class Release(Base):
             "released_on": self.released_on,
             "chat_id": self.chat_id,
             "search_prefix": self.search_prefix,
+            "custom_tags": self.custom_tags,
+            "file_prefix": self.file_prefix,
             "is_completed": self.is_completed,
         }
 

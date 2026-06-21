@@ -31,7 +31,7 @@ from bot.utils.subtitle_converter import convert_ass_to_srt
 from bot.repositories.publishing import (
     get_release_by_topic, set_release_topic, save_topic_file,
     get_latest_topic_files, save_release_post, get_release_credits,
-    get_topic_for_release_in_group,
+    get_topic_for_release_in_group, set_release_tags, set_release_file_prefix,
 )
 from bot.services.media_processor import process_episode, STEPS, _detect_file_type
 from bot.services.yadisk import extract_cloud_url, get_resource_info
@@ -967,12 +967,15 @@ async def cmd_pub(message: Message) -> None:
     try:
         paths = await process_episode(bot, files, work_dir, on_progress, telethon_client=telethon_client)
 
-        _en_name = release.get("name") or release_name
-        _safe = re.sub(r'[^\w\s-]', '', _en_name).strip()
+        _prefix = release.get("file_prefix") or release.get("name") or release_name
+        _safe = re.sub(r'[^\w\s-]', '', _prefix).strip()
         _safe = re.sub(r'\s+', '_', _safe)
         named_mkv = paths["mkv"].parent / f"{_safe}_E{episode:02d}.mkv"
+        named_mp4 = paths["mp4"].parent / f"{_safe}_E{episode:02d}.mp4"
         paths["mkv"].rename(named_mkv)
+        paths["mp4"].rename(named_mp4)
         paths["mkv"] = named_mkv
+        paths["mp4"] = named_mp4
 
         credits = await get_release_credits(release["id"])
         channel_id = ANNOUNCEMENT_CHANNEL_ID or None
@@ -1016,6 +1019,88 @@ async def cmd_pub(message: Message) -> None:
             pass
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+@router.message(Command("settags"))
+async def cmd_settags(message: Message) -> None:
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.reply(
+            "Использование: /settags <code>release_id</code> <code>#тег1 #тег2</code>\n"
+            "Пример: /settags 62001 #NewHorizons #Anime"
+        )
+        return
+    release_id = int(parts[1])
+    tags = parts[2].strip()
+    ok = await set_release_tags(release_id, tags)
+    if ok:
+        await message.reply(f"✅ Теги релиза {release_id} обновлены:\n<code>{tags}</code>")
+    else:
+        await message.reply(f"❌ Релиз {release_id} не найден.")
+
+
+@router.message(Command("setfilename"))
+async def cmd_setfilename(message: Message) -> None:
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.reply(
+            "Использование: /setfilename <code>release_id</code> <code>ИмяФайла</code>\n"
+            "Пример: /setfilename 62001 NHS_HaruNoMai\n"
+            "Результат: <code>NHS_HaruNoMai_E12.mkv</code>"
+        )
+        return
+    release_id = int(parts[1])
+    prefix = parts[2].strip()
+    ok = await set_release_file_prefix(release_id, prefix)
+    if ok:
+        await message.reply(
+            f"✅ Имя файла для релиза {release_id} обновлено:\n"
+            f"<code>{prefix}_E01.mkv / {prefix}_E01.mp4</code>"
+        )
+    else:
+        await message.reply(f"❌ Релиз {release_id} не найден.")
+
+
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    text = (
+        "<b>📖 Инструкция по боту</b>\n\n"
+
+        "<b>1. Подготовка релиза</b>\n"
+        "• <code>/release_add &lt;shikimori_url&gt;</code> — добавить аниме из Shikimori\n"
+        "• <code>/settags &lt;release_id&gt; &lt;#тег1 #тег2&gt;</code> — задать кастомные теги для постов\n"
+        "• <code>/setfilename &lt;release_id&gt; &lt;имя&gt;</code> — имя файла MKV/MP4 (пример: <code>NHS_HaruNoMai</code>)\n"
+        "• <code>/setcover &lt;release_id&gt; &lt;серия&gt;</code> — обложка серии (ответить на фото)\n\n"
+
+        "<b>2. Привязка топиков</b>\n"
+        "Команда пишется <b>внутри топика</b>:\n"
+        "• <code>/settopic &lt;release_id&gt;</code> — привязать топик к релизу\n"
+        "  Нужно сделать в двух местах:\n"
+        "  — в рабочем топике (где лежат файлы)\n"
+        "  — в топике группы релизов (куда идут посты)\n\n"
+
+        "<b>3. Файлы в рабочем топике</b>\n"
+        "После <code>/settopic</code> бот автоматически запоминает:\n"
+        "• Аудио (.flac / .wav)\n"
+        "• Видео (.mkv / .mov) или архив (.zip / .rar)\n"
+        "• Субтитры (.ass) — опционально\n"
+        "• Ссылки Яндекс Диска / Google Drive\n\n"
+
+        "<b>4. Публикация</b>\n"
+        "• <code>/pub &lt;серия&gt;</code> — конвертация + загрузка в группу и канал\n"
+        "  Команда пишется в рабочем топике\n\n"
+
+        "<b>5. Управление командой</b>\n"
+        "• <code>/reales</code> — выбрать релизы из Shikimori (личный чат)\n"
+        "• <code>/setreales</code> — назначить команду на релиз (личный чат)\n\n"
+
+        "<b>6. Утилиты</b>\n"
+        "• <code>/srt</code> — конвертировать ASS → SRT\n"
+        "  (отправить файл с командой или ответить на файл)\n"
+        "• <code>/check_release &lt;release_id&gt;</code> — обновить данные с Shikimori\n"
+        "• <code>/complete_release &lt;release_id&gt;</code> — отметить релиз завершённым\n"
+    )
+    await message.reply(text)
 
 
 async def main() -> None:

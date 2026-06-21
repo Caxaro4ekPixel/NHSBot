@@ -60,25 +60,27 @@ def _format_credits(credits: Dict[str, List[dict]]) -> str:
     return "\n".join(lines)
 
 
-def build_group_mp4_caption(release: dict, episode: int) -> str:
-    name_ru = release.get("name_ru") or release.get("name") or ""
+def _build_tags(release: dict) -> list:
     name_en = release.get("name") or ""
+    name_ru = release.get("name_ru") or ""
     tags = []
     if name_en:
         tags.append(_hashtag(name_en))
     if name_ru and name_ru != name_en:
         tags.append(_hashtag(name_ru))
+    custom = (release.get("custom_tags") or "").strip()
+    if custom:
+        tags.append(custom)
+    return tags
+
+
+def build_group_mp4_caption(release: dict, episode: int) -> str:
+    tags = _build_tags(release)
     return f"{episode} серия\n\n{' '.join(tags)}"
 
 
 def build_group_mkv_caption(release: dict, episode: int) -> str:
-    name_ru = release.get("name_ru") or release.get("name") or ""
-    name_en = release.get("name") or ""
-    tags = []
-    if name_en:
-        tags.append(_hashtag(name_en))
-    if name_ru and name_ru != name_en:
-        tags.append(_hashtag(name_ru))
+    tags = _build_tags(release)
     return (
         f"{episode} серия\n"
         f"📥 Качество: 1080p\n"
@@ -93,12 +95,7 @@ def build_channel_caption(
     mp4_url: str,
 ) -> str:
     name_ru = release.get("name_ru") or release.get("name") or ""
-    name_en = release.get("name") or ""
-    tags = []
-    if name_en:
-        tags.append(_hashtag(name_en))
-    if name_ru and name_ru != name_en:
-        tags.append(_hashtag(name_ru))
+    tags = _build_tags(release)
 
     credits_text = _format_credits(credits)
     parts = [f"💛{name_ru} — {episode} серия", ""]
