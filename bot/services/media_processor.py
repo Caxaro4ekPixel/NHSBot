@@ -1,15 +1,13 @@
-"""
-Media processing pipeline for episode publishing.
-Steps: download files → extract archive → convert audio → mux MKV → convert MP4 → screenshot
-Progress is reported via on_progress(step: str, pct: Optional[int]) callback.
-"""
 import asyncio
+import random
 import shutil
 from pathlib import Path
 from typing import Callable, Awaitable, Optional, Dict
 
+import aiohttp
 from aiogram import Bot
 from bot.core.logger import get_logger
+from bot.services.yadisk import download_from_yadisk
 
 logger = get_logger(__name__)
 
@@ -26,7 +24,6 @@ ProgressCb = Callable[[str, Optional[int]], Awaitable[None]]
 
 
 async def _run(args: list, step: str) -> None:
-    """Run subprocess, raise on non-zero exit (mkvmerge exit 1 = warnings, OK)."""
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdout=asyncio.subprocess.PIPE,
@@ -39,7 +36,6 @@ async def _run(args: list, step: str) -> None:
 
 
 async def _run_with_progress(args: list, duration: float, on_pct: Callable[[int], Awaitable[None]]) -> None:
-    """Run ffmpeg with -progress pipe:1 and parse progress."""
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdout=asyncio.subprocess.PIPE,
@@ -71,7 +67,6 @@ async def _run_with_progress(args: list, duration: float, on_pct: Callable[[int]
 
 
 async def get_duration(path: Path) -> float:
-    """Get video/audio duration in seconds using ffprobe."""
     proc = await asyncio.create_subprocess_exec(
         "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
         "-of", "csv=p=0", str(path),
@@ -94,10 +89,7 @@ async def download_file(
     message_id: int = None,
     on_pct: Callable[[int], Awaitable[None]] = None,
 ) -> None:
-    """Download a file from Telegram or Yandex Disk."""
-    # Yandex Disk public link
     if file_id.startswith("http"):
-        from bot.services.yadisk import download_from_yadisk
         ok = await download_from_yadisk(file_id, dest, on_pct=on_pct)
         if not ok:
             raise RuntimeError(f"Не удалось скачать файл с Яндекс Диска: {file_id}")
@@ -124,14 +116,12 @@ async def download_file(
         except Exception as e:
             logger.warning(f"Telethon download failed, falling back to Bot API: {e}")
 
-    # Fallback: standard Bot API (works for files ≤20MB)
     file = await bot.get_file(file_id)
     file_path = file.file_path
     local = Path(file_path)
     if local.exists():
         shutil.copy2(local, dest)
         return
-    import aiohttp
     url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
@@ -142,7 +132,6 @@ async def download_file(
 
 
 async def extract_archive(archive_path: Path, dest_dir: Path) -> Path:
-    """Extract ZIP/RAR/7z and return path to the largest video file inside."""
     await _run(["7z", "x", f"-o{dest_dir}", "-y", str(archive_path)], "extract")
     video_exts = {".mkv", ".mov", ".mp4", ".avi"}
     candidates = [f for f in dest_dir.rglob("*") if f.suffix.lower() in video_exts]
@@ -152,7 +141,6 @@ async def extract_archive(archive_path: Path, dest_dir: Path) -> Path:
 
 
 async def convert_audio(src: Path, dst: Path, on_progress: ProgressCb) -> None:
-    """FLAC/WAV → M4A AAC-LC CBR 256k stereo 48kHz."""
     duration = await get_duration(src)
     last: dict = {"pct": -1}
 
@@ -173,7 +161,6 @@ async def convert_audio(src: Path, dst: Path, on_progress: ProgressCb) -> None:
 
 
 async def mux_mkv(video: Path, audio: Path, subs: Optional[Path], output: Path) -> None:
-    """Mux video + audio + optional ASS subs into MKV with New Horizons Studio track names."""
     args = [
         "mkvmerge", "-o", str(output),
         "--track-name", "0:New Horizons Studio",
@@ -192,7 +179,6 @@ async def mux_mkv(video: Path, audio: Path, subs: Optional[Path], output: Path) 
 
 
 async def convert_mp4(mkv: Path, output: Path, on_progress: ProgressCb) -> None:
-    """MKV → MP4 H.264 1080p, copy audio."""
     duration = await get_duration(mkv)
     last: dict = {"pct": -1}
 
@@ -205,7 +191,7 @@ async def convert_mp4(mkv: Path, output: Path, on_progress: ProgressCb) -> None:
     await _run_with_progress([
         "ffmpeg", "-y", "-progress", "pipe:1",
         "-i", str(mkv),
-        "-c:v", "libx264", "-preset", "medium", "-crf", "16",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "23",
         "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
         "-c:a", "copy",
         "-movflags", "+faststart",
@@ -215,8 +201,6 @@ async def convert_mp4(mkv: Path, output: Path, on_progress: ProgressCb) -> None:
 
 
 async def take_screenshot(mkv: Path, output: Path) -> None:
-    """Extract a random frame (between 20% and 80% of duration) as JPEG."""
-    import random
     duration = await get_duration(mkv)
     if duration <= 0:
         duration = 1400.0

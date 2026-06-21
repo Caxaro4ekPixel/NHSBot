@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime
@@ -8,11 +9,14 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 from bot.middleware.logging import LoggingMiddleware
 from bot.services.service import users_with, load_reales, fmt_users, save_assignment, mention_html, collect_member_ids, \
     build_chat_title, load_assignment, search_reales, download_bytes, add_release, update_release_chat_id
@@ -48,8 +52,6 @@ dp = Dispatcher()
 dp.include_router(router)
 
 if LOCAL_API_URL:
-    from aiogram.client.telegram import TelegramAPIServer
-
     _api_server = TelegramAPIServer.from_base(LOCAL_API_URL, is_local=True)
 else:
     _api_server = None
@@ -60,16 +62,12 @@ bot = Bot(
     **({"server": _api_server} if _api_server else {}),
 )
 
-# Telethon client for large file downloads (MTProto, no size limits)
 _tg_api_id = int(os.getenv("TELEGRAM_API_ID", "0"))
 _tg_api_hash = os.getenv("TELEGRAM_API_HASH", "")
 telethon_client = None
 if _tg_api_id and _tg_api_hash:
-    from telethon import TelegramClient
-    from telethon.sessions import StringSession
     telethon_client = TelegramClient(StringSession(), _tg_api_id, _tg_api_hash)
 
-# Register middleware
 dp.message.middleware(LoggingMiddleware())
 dp.callback_query.middleware(LoggingMiddleware())
 
@@ -581,32 +579,6 @@ async def on_release_pick(cb: CallbackQuery):
         text_lines.append("—")
     if invite_link:
         text_lines.append(f"\nСсылка-приглашение:\n{invite_link}")
-    # if title_src.get('image'):
-    #     try:
-    #         image_url = title_src['image']
-    #         data = await download_bytes(image_url)
-    #         if len(data) > 10 * 1024 * 1024:
-    #             logging.warning(f"Image too large for release {release_id}: {len(data)} bytes")
-    #         else:
-    #             im = Image.open(io.BytesIO(data))
-    #             if im.mode not in ("RGB", "RGBA"):
-    #                 im = im.convert("RGB")
-    #             w, h = im.size
-    #             side = min(w, h)
-    #             x = (w - side) // 2
-    #             y = (h - side) // 2
-    #             im = im.crop((x, y, x + side, y + side)).resize((512, 512), Image.LANCZOS)
-    #             buf = io.BytesIO()
-    #             im.save(buf, format="JPEG", quality=90)
-    #             photo = BufferedInputFile(buf.getvalue(), filename="poster.jpg")
-    #             await cb.message.bot.set_chat_photo(cb.message.chat.id, photo)
-    #     except Exception as e:
-    #         logging.error(f"Failed to set chat photo for release {release_id}: {e}")
-    # for uid in member_ids:
-    #     try:
-    #         await cb.message.bot.send_message(uid, f"Приглашение в группу релиза:\n{invite_link}")
-    #     except Exception:
-    #         pass
     await cb.message.edit_text("\n".join(text_lines), parse_mode=ParseMode.HTML)
     await cb.answer()
 
@@ -734,7 +706,6 @@ async def command_set_prefix_handler(message: Message) -> None:
 
 @router.message(Command("srt"))
 async def command_srt_handler(message: Message) -> None:
-    # Accept: file sent with /srt as caption, OR /srt as reply to a message with a file
     doc_message = message
     if not message.document:
         if message.reply_to_message and message.reply_to_message.document:
@@ -784,7 +755,6 @@ async def command_srt_handler(message: Message) -> None:
 
 @router.message(Command("settopic"))
 async def cmd_settopic(message: Message) -> None:
-    """Link current forum topic to a release. Usage: /settopic <release_id>"""
     if not message.message_thread_id:
         await message.reply("Команду нужно отправить внутри топика.")
         return
@@ -819,7 +789,6 @@ _MIME_TO_TYPE = {
 
 @router.message(F.document | F.audio)
 async def track_topic_file(message: Message) -> None:
-    """Auto-track files uploaded to release group topics (document or audio type)."""
     if not message.message_thread_id:
         return
     file_obj = message.document or message.audio
@@ -858,7 +827,6 @@ def cover_path(release_id: int, episode: int) -> Path:
 
 @router.message(Command("setcover"))
 async def cmd_setcover(message: Message) -> None:
-    """Save episode cover. Usage: reply to photo with /setcover <release_id> <episode>"""
     parts = (message.text or "").split()
     if len(parts) < 3 or not parts[1].isdigit() or not parts[2].isdigit():
         await message.reply("Использование: ответь на фото командой /setcover <code>release_id</code> <code>episode</code>")
@@ -866,7 +834,6 @@ async def cmd_setcover(message: Message) -> None:
 
     release_id, episode = int(parts[1]), int(parts[2])
 
-    # Photo from reply or current message
     photo = None
     if message.reply_to_message and message.reply_to_message.photo:
         photo = message.reply_to_message.photo[-1]
@@ -889,7 +856,6 @@ async def cmd_setcover(message: Message) -> None:
 
 @router.message(F.text & ~F.text.startswith("/"))
 async def track_yadisk_link(message: Message) -> None:
-    """Auto-track Yandex Disk / Google Drive links posted in release group topics."""
     if not message.message_thread_id or not message.text:
         return
     result = extract_cloud_url(message.text)
@@ -926,7 +892,6 @@ async def track_yadisk_link(message: Message) -> None:
 
 @router.message(Command("pub"))
 async def cmd_pub(message: Message) -> None:
-    """Publish episode from working topic to release group topic. Usage: /pub <episode>"""
     if not message.message_thread_id:
         await message.reply("Команду нужно отправить внутри топика.")
         return
@@ -938,7 +903,6 @@ async def cmd_pub(message: Message) -> None:
     src_group_id = message.chat.id
     src_topic_id = message.message_thread_id
 
-    # Определяем релиз по текущему топику (рабочий топик с файлами)
     release = await get_release_by_topic(src_group_id, src_topic_id)
     if not release:
         await message.reply(
@@ -948,7 +912,6 @@ async def cmd_pub(message: Message) -> None:
         )
         return
 
-    # Определяем куда публиковать: топик в группе релизов
     if not RELEASE_GROUP_ID:
         await message.reply("❌ RELEASE_GROUP_ID не задан в .env")
         return
@@ -961,7 +924,6 @@ async def cmd_pub(message: Message) -> None:
         )
         return
 
-    # Берём файлы из рабочего топика
     files = await get_latest_topic_files(release["id"], src_topic_id)
 
     has_audio = any(k in files for k in ("flac", "wav"))
@@ -982,8 +944,7 @@ async def cmd_pub(message: Message) -> None:
 
     async def on_progress(step: str, pct=None):
         if step.startswith("download_"):
-            # download_flac (1/2) → "📥 Скачиваю FLAC... 45%"
-            rest = step[len("download_"):]          # "flac (1/2)" or "flac"
+            rest = step[len("download_"):]
             parts = rest.split(" ", 1)
             ext = parts[0].upper()
             suffix = f" {parts[1]}" if len(parts) > 1 else ""
@@ -1006,11 +967,9 @@ async def cmd_pub(message: Message) -> None:
     try:
         paths = await process_episode(bot, files, work_dir, on_progress, telethon_client=telethon_client)
 
-        # Переименовываем MKV: ReleaseName_E12.mkv (используем английское название)
-        import re as _re
         _en_name = release.get("name") or release_name
-        _safe = _re.sub(r'[^\w\s-]', '', _en_name).strip()
-        _safe = _re.sub(r'\s+', '_', _safe)
+        _safe = re.sub(r'[^\w\s-]', '', _en_name).strip()
+        _safe = re.sub(r'\s+', '_', _safe)
         named_mkv = paths["mkv"].parent / f"{_safe}_E{episode:02d}.mkv"
         paths["mkv"].rename(named_mkv)
         paths["mkv"] = named_mkv
@@ -1019,7 +978,6 @@ async def cmd_pub(message: Message) -> None:
         channel_id = ANNOUNCEMENT_CHANNEL_ID or None
         ep_cover = cover_path(release["id"], episode)
 
-        # Публикуем в группу релизов (не в рабочую)
         post_ids = await publish_episode(
             bot=bot,
             release=release,
