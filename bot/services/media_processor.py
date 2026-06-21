@@ -1,6 +1,9 @@
 import asyncio
+import hashlib
+import os
 import random
 import shutil
+import time
 from pathlib import Path
 from typing import Callable, Awaitable, Optional, Dict
 
@@ -10,6 +13,33 @@ from bot.core.logger import get_logger
 from bot.services.yadisk import download_from_yadisk
 
 logger = get_logger(__name__)
+
+CACHE_DIR = Path("/tmp/nhs_cache")
+CACHE_TTL = 3600
+
+
+def _cache_path(file_id: str, filename: str, message_id: int = None, group_id: int = None) -> Path:
+    if file_id.startswith("http"):
+        key = "cl_" + hashlib.md5(file_id.encode()).hexdigest()[:16]
+    elif message_id and group_id:
+        key = f"tg_{abs(group_id)}_{message_id}"
+    else:
+        key = "fid_" + file_id[:24].replace(":", "_").replace("/", "_")
+    return CACHE_DIR / f"{key}_{filename}"
+
+
+def _is_cached(path: Path) -> bool:
+    return path.exists() and (time.time() - path.stat().st_mtime) < CACHE_TTL
+
+
+def _cleanup_cache() -> None:
+    if not CACHE_DIR.exists():
+        return
+    now = time.time()
+    for f in CACHE_DIR.iterdir():
+        if f.is_file() and (now - f.stat().st_mtime) > CACHE_TTL:
+            f.unlink(missing_ok=True)
+
 
 STEPS = {
     "download":   "📥 Скачиваю файлы...",
@@ -89,13 +119,25 @@ async def download_file(
     message_id: int = None,
     on_pct: Callable[[int], Awaitable[None]] = None,
 ) -> None:
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _cleanup_cache()
+    cached = _cache_path(file_id, dest.name, message_id, group_id)
+
+    if _is_cached(cached):
+        logger.info(f"Cache hit: {dest.name}")
+        try:
+            os.link(cached, dest)
+        except OSError:
+            shutil.copy2(cached, dest)
+        if on_pct:
+            await on_pct(100)
+        return
+
     if file_id.startswith("http"):
         ok = await download_from_yadisk(file_id, dest, on_pct=on_pct)
         if not ok:
             raise RuntimeError(f"Не удалось скачать файл с Яндекс Диска: {file_id}")
-        return
-
-    if telethon_client and group_id and message_id:
+    elif telethon_client and group_id and message_id:
         try:
             msg = await telethon_client.get_messages(group_id, ids=message_id)
             if msg and msg.media:
@@ -112,23 +154,29 @@ async def download_file(
                 await telethon_client.download_media(msg, file=str(dest), progress_callback=_progress)
                 if on_pct:
                     await on_pct(100)
-                return
         except Exception as e:
             logger.warning(f"Telethon download failed, falling back to Bot API: {e}")
+    else:
+        file = await bot.get_file(file_id)
+        file_path = file.file_path
+        local = Path(file_path)
+        if local.exists():
+            shutil.copy2(local, dest)
+        else:
+            url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    resp.raise_for_status()
+                    with open(dest, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(1024 * 1024):
+                            f.write(chunk)
 
-    file = await bot.get_file(file_id)
-    file_path = file.file_path
-    local = Path(file_path)
-    if local.exists():
-        shutil.copy2(local, dest)
-        return
-    url = f"https://api.telegram.org/file/bot{bot.token}/{file_path}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            resp.raise_for_status()
-            with open(dest, "wb") as f:
-                async for chunk in resp.content.iter_chunked(1024 * 1024):
-                    f.write(chunk)
+    if dest.exists():
+        try:
+            os.link(dest, cached)
+        except OSError:
+            shutil.copy2(dest, cached)
+        logger.info(f"Cached: {dest.name}")
 
 
 async def extract_archive(archive_path: Path, dest_dir: Path) -> Path:
