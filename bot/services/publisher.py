@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Optional, Dict, List, Callable, Awaitable
 
 from aiogram import Bot
-from aiogram.types import FSInputFile
 from aiogram.enums import ParseMode
 from telethon.tl.types import PeerChannel
 from bot.core.logger import get_logger
@@ -122,46 +121,58 @@ async def publish_to_staging(
     cover_path: Optional[Path] = None,
     telethon_client=None,
 ) -> Dict[str, Optional[int]]:
+    if telethon_client is None:
+        raise RuntimeError("Telethon client required")
+
+    # Resolve staging entity (bot is a member, get_dialogs() cached it at startup)
+    staging_entity = await telethon_client.get_entity(staging_chat_id)
     thumb = cover_path or (screenshot_path if screenshot_path.exists() else None)
 
     await on_progress("upload_mp4", None)
-    mp4_msg = await bot.send_video(
-        chat_id=staging_chat_id,
-        video=FSInputFile(mp4_path),
-        caption=build_group_mp4_caption(release, episode),
-        thumbnail=FSInputFile(thumb) if thumb else None,
-        supports_streaming=True,
-        parse_mode=ParseMode.HTML,
-        request_timeout=3600,
+    mp4_msg = await asyncio.wait_for(
+        telethon_client.send_file(
+            entity=staging_entity,
+            file=str(mp4_path),
+            caption=build_group_mp4_caption(release, episode),
+            supports_streaming=True,
+            thumb=str(thumb) if thumb else None,
+            parse_mode="html",
+        ),
+        timeout=3600,
     )
-    logger.info(f"Staging MP4 id={mp4_msg.message_id}")
+    logger.info(f"Staging MP4 id={mp4_msg.id}")
 
     await on_progress("upload_mkv", None)
-    mkv_msg = await bot.send_document(
-        chat_id=staging_chat_id,
-        document=FSInputFile(mkv_path),
-        caption=build_group_mkv_caption(release, episode),
-        parse_mode=ParseMode.HTML,
-        request_timeout=3600,
+    mkv_msg = await asyncio.wait_for(
+        telethon_client.send_file(
+            entity=staging_entity,
+            file=str(mkv_path),
+            caption=build_group_mkv_caption(release, episode),
+            force_document=True,
+            parse_mode="html",
+        ),
+        timeout=3600,
     )
-    logger.info(f"Staging MKV id={mkv_msg.message_id}")
+    logger.info(f"Staging MKV id={mkv_msg.id}")
 
     staging_channel_msg_id = None
     if screenshot_path.exists():
         await on_progress("upload_channel", None)
-        ch_msg = await bot.send_photo(
-            chat_id=staging_chat_id,
-            photo=FSInputFile(screenshot_path),
-            caption=build_channel_caption(release, episode, credits, ""),
-            parse_mode=ParseMode.HTML,
-            request_timeout=300,
+        ch_msg = await asyncio.wait_for(
+            telethon_client.send_file(
+                entity=staging_entity,
+                file=str(screenshot_path),
+                caption=build_channel_caption(release, episode, credits, ""),
+                parse_mode="html",
+            ),
+            timeout=300,
         )
-        staging_channel_msg_id = ch_msg.message_id
-        logger.info(f"Staging channel preview id={ch_msg.message_id}")
+        staging_channel_msg_id = ch_msg.id
+        logger.info(f"Staging channel preview id={ch_msg.id}")
 
     return {
-        "staging_mp4_id": mp4_msg.message_id,
-        "staging_mkv_id": mkv_msg.message_id,
+        "staging_mp4_id": mp4_msg.id,
+        "staging_mkv_id": mkv_msg.id,
         "staging_channel_msg_id": staging_channel_msg_id,
     }
 
