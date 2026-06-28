@@ -1173,8 +1173,17 @@ async def main() -> None:
     if migrated_count > 0:
         logger.info(f"Migrated {migrated_count} users from file to database")
     if telethon_client:
-        await telethon_client.start(bot_token=TOKEN)
-        logger.info("Telethon client started (large file downloads enabled)")
+        from telethon.errors import FloodWaitError
+        for attempt in range(5):
+            try:
+                await telethon_client.start(bot_token=TOKEN)
+                logger.info("Telethon client started (large file downloads enabled)")
+                break
+            except FloodWaitError as e:
+                logger.warning(f"Telethon FloodWait {e.seconds}s (attempt {attempt+1}/5), waiting...")
+                await asyncio.sleep(e.seconds + 5)
+        else:
+            logger.error("Telethon failed to start after flood waits, continuing without it")
     logger.info("Bot started and ready to receive updates")
     try:
         await dp.start_polling(bot)
