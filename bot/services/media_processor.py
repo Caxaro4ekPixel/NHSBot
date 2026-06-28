@@ -156,7 +156,8 @@ async def download_file(
                     await on_pct(100)
         except Exception as e:
             logger.warning(f"Telethon download failed, falling back to Bot API: {e}")
-    else:
+
+    if not dest.exists():
         file = await bot.get_file(file_id)
         file_path = file.file_path
         local = Path(file_path)
