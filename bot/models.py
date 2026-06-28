@@ -189,6 +189,39 @@ class ReleasePost(Base):
     )
 
 
+class StagingPost(Base):
+    __tablename__ = "staging_posts"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    release_id = Column(Integer, nullable=False)
+    episode = Column(Integer, nullable=False)
+    group_id = Column(BigInteger, nullable=False)
+    topic_id = Column(Integer, nullable=False)
+    channel_id = Column(BigInteger, nullable=True)
+    staging_mp4_id = Column(Integer, nullable=True)
+    staging_mkv_id = Column(Integer, nullable=True)
+    staging_channel_msg_id = Column(Integer, nullable=True)
+    status = Column(String, default="pending")
+    created_at = Column(DateTime, default=func.now())
+    __table_args__ = (
+        Index("idx_staging_posts_status", "status"),
+        Index("idx_staging_posts_release", "release_id", "episode"),
+    )
+
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "release_id": self.release_id,
+            "episode": self.episode,
+            "group_id": self.group_id,
+            "topic_id": self.topic_id,
+            "channel_id": self.channel_id,
+            "staging_mp4_id": self.staging_mp4_id,
+            "staging_mkv_id": self.staging_mkv_id,
+            "staging_channel_msg_id": self.staging_channel_msg_id,
+            "status": self.status,
+        }
+
+
 async def get_session() -> AsyncSession:
     async with async_session_maker() as session:
         yield session

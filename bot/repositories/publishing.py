@@ -1,6 +1,6 @@
 from typing import Optional, Dict, List
 from sqlalchemy import select, and_, desc
-from bot.models import ReleaseTopic, TopicFile, ReleasePost, User, ReleaseAssignment, Release, async_session_maker
+from bot.models import ReleaseTopic, TopicFile, ReleasePost, User, ReleaseAssignment, Release, StagingPost, async_session_maker
 from bot.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -129,6 +129,39 @@ async def set_release_file_prefix(release_id: int, prefix: str) -> bool:
         release.file_prefix = prefix
         await session.commit()
         return True
+
+
+async def save_staging_post(
+    release_id: int, episode: int,
+    group_id: int, topic_id: int, channel_id: Optional[int],
+    staging_mp4_id: Optional[int], staging_mkv_id: Optional[int],
+    staging_channel_msg_id: Optional[int],
+) -> int:
+    async with async_session_maker() as session:
+        post = StagingPost(
+            release_id=release_id, episode=episode,
+            group_id=group_id, topic_id=topic_id, channel_id=channel_id,
+            staging_mp4_id=staging_mp4_id, staging_mkv_id=staging_mkv_id,
+            staging_channel_msg_id=staging_channel_msg_id, status="pending",
+        )
+        session.add(post)
+        await session.commit()
+        await session.refresh(post)
+        return post.id
+
+
+async def get_staging_post(staging_post_id: int) -> Optional[dict]:
+    async with async_session_maker() as session:
+        post = await session.get(StagingPost, staging_post_id)
+        return post.to_dict() if post else None
+
+
+async def mark_staging_published(staging_post_id: int) -> None:
+    async with async_session_maker() as session:
+        post = await session.get(StagingPost, staging_post_id)
+        if post:
+            post.status = "published"
+            await session.commit()
 
 
 async def get_release_credits(release_id: int) -> Dict[str, List[dict]]:

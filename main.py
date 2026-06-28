@@ -12,7 +12,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.client.telegram import TelegramAPIServer
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.types import Message, CallbackQuery, BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramBadRequest
 from telethon import TelegramClient
@@ -32,11 +32,12 @@ from bot.repositories.publishing import (
     get_release_by_topic, set_release_topic, save_topic_file,
     get_latest_topic_files, save_release_post, get_release_credits,
     get_topic_for_release_in_group, set_release_tags, set_release_file_prefix,
+    save_staging_post, get_staging_post, mark_staging_published,
 )
 from bot.services.media_processor import process_episode, STEPS, _detect_file_type
 from bot.services.yadisk import extract_cloud_url, get_resource_info
-from bot.services.publisher import publish_episode
-from config import BOT_VERSION, LOCAL_API_URL, RELEASE_GROUP_ID, ANNOUNCEMENT_CHANNEL_ID
+from bot.services.publisher import publish_to_staging, publish_from_staging
+from config import BOT_VERSION, LOCAL_API_URL, RELEASE_GROUP_ID, ANNOUNCEMENT_CHANNEL_ID, STAGING_CHAT_ID
 
 setup_logging()
 logger = get_logger(__name__)
@@ -583,6 +584,58 @@ async def on_release_pick(cb: CallbackQuery):
     await cb.answer()
 
 
+@router.callback_query(F.data.startswith("stg_pub:"))
+async def on_staging_publish(cb: CallbackQuery):
+    if str(cb.from_user.id) not in ADMINS:
+        await cb.answer("Not authorized!", show_alert=True)
+        return
+
+    staging_post_id = int(cb.data.split(":", 1)[1])
+    staging_post = await get_staging_post(staging_post_id)
+    if not staging_post:
+        await cb.answer("Пост не найден", show_alert=True)
+        return
+    if staging_post["status"] == "published":
+        await cb.answer("Уже опубликовано", show_alert=True)
+        return
+
+    await cb.answer("Публикую...")
+    try:
+        release = await search_reales(str(staging_post["release_id"]))
+        credits = await get_release_credits(staging_post["release_id"])
+
+        post_ids = await publish_from_staging(
+            staging_chat_id=STAGING_CHAT_ID,
+            staging_post=staging_post,
+            release=release,
+            credits=credits,
+            telethon_client=telethon_client,
+        )
+
+        await save_release_post(
+            release_id=staging_post["release_id"],
+            episode=staging_post["episode"],
+            group_id=staging_post["group_id"],
+            topic_id=staging_post["topic_id"],
+            mp4_msg_id=post_ids.get("group_mp4_id"),
+            mkv_msg_id=post_ids.get("group_mkv_id"),
+            channel_id=staging_post["channel_id"],
+            channel_msg_id=post_ids.get("channel_msg_id"),
+        )
+
+        await mark_staging_published(staging_post_id)
+
+        await cb.message.edit_text(
+            cb.message.text + "\n\n✅ Опубликовано!",
+            reply_markup=None,
+        )
+    except Exception as e:
+        logger.error(f"Staging publish failed: {e}", exc_info=True)
+        await cb.message.edit_text(
+            cb.message.text + f"\n\n❌ Ошибка: {str(e)[:200]}",
+        )
+
+
 @router.callback_query(F.data == "noop")
 async def noop(cb: CallbackQuery):
     await cb.answer("Выберите хотя бы одного участника", show_alert=True)
@@ -981,35 +1034,46 @@ async def cmd_pub(message: Message) -> None:
         channel_id = ANNOUNCEMENT_CHANNEL_ID or None
         ep_cover = cover_path(release["id"], episode)
 
-        post_ids = await publish_episode(
-            bot=bot,
+        staging_ids = await publish_to_staging(
+            staging_chat_id=STAGING_CHAT_ID,
             release=release,
             episode=episode,
             mkv_path=paths["mkv"],
             mp4_path=paths["mp4"],
             screenshot_path=paths["screenshot"],
-            group_id=RELEASE_GROUP_ID,
-            topic_id=dest_topic_id,
-            channel_id=channel_id,
             credits=credits,
             cover_path=ep_cover if ep_cover.exists() else None,
             on_progress=on_progress,
             telethon_client=telethon_client,
         )
 
-        await save_release_post(
+        staging_post_id = await save_staging_post(
             release_id=release["id"],
             episode=episode,
             group_id=RELEASE_GROUP_ID,
             topic_id=dest_topic_id,
-            mp4_msg_id=post_ids.get("group_mp4_id"),
-            mkv_msg_id=post_ids.get("group_mkv_id"),
             channel_id=channel_id,
-            channel_msg_id=post_ids.get("channel_msg_id"),
+            staging_mp4_id=staging_ids["staging_mp4_id"],
+            staging_mkv_id=staging_ids["staging_mkv_id"],
+            staging_channel_msg_id=staging_ids["staging_channel_msg_id"],
+        )
+
+        release_name_display = release.get("name_ru") or release.get("name") or str(release["id"])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(
+                text="✅ Опубликовать",
+                callback_data=f"stg_pub:{staging_post_id}"
+            )
+        ]])
+        await bot.send_message(
+            chat_id=STAGING_CHAT_ID,
+            text=f"📋 <b>{release_name_display}</b> — серия {episode}\n\nГотово к публикации в группу (топик {dest_topic_id})",
+            reply_markup=kb,
+            parse_mode="HTML",
         )
 
         await status_msg.edit_text(
-            f"✅ Серия {episode} «{release_name}» опубликована!"
+            f"✅ Серия {episode} «{release_name}» загружена в стейджинг!\nАдмин должен подтвердить публикацию."
         )
     except Exception as e:
         logger.error(f"Publishing failed for release {release['id']} ep{episode}: {e}", exc_info=True)
