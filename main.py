@@ -1045,6 +1045,7 @@ async def cmd_pub(message: Message) -> None:
             credits=credits,
             cover_path=ep_cover if ep_cover.exists() else None,
             on_progress=on_progress,
+            telethon_client=telethon_client,
         )
 
         staging_post_id = await save_staging_post(
