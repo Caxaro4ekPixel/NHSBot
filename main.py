@@ -1174,7 +1174,6 @@ async def main() -> None:
         logger.info(f"Migrated {migrated_count} users from file to database")
     if telethon_client:
         await telethon_client.start(bot_token=TOKEN)
-        await telethon_client.get_dialogs(limit=100)
         logger.info("Telethon client started (large file downloads enabled)")
     logger.info("Bot started and ready to receive updates")
     try:

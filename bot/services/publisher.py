@@ -5,7 +5,8 @@ from typing import Optional, Dict, List, Callable, Awaitable
 
 from aiogram import Bot
 from aiogram.enums import ParseMode
-from telethon.tl.types import PeerChannel
+from telethon.tl.types import PeerChannel, InputChannel
+from telethon.tl.functions.channels import GetChannelsRequest
 from bot.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -33,6 +34,19 @@ def _group_link(group_id: int, message_id: int, topic_id: Optional[int] = None) 
     if cid.startswith('100'):
         cid = cid[3:]
     return f"https://t.me/c/{cid}/{message_id}"
+
+
+async def _resolve_entity(client, chat_id: int):
+    """Resolve entity for a bot client, even if not in session cache."""
+    try:
+        return await client.get_entity(chat_id)
+    except ValueError:
+        s = str(abs(chat_id))
+        channel_id = int(s[3:]) if s.startswith('100') else int(s)
+        result = await client(GetChannelsRequest([InputChannel(channel_id, access_hash=0)]))
+        if result.chats:
+            return result.chats[0]
+        raise ValueError(f"Cannot resolve entity for chat_id={chat_id}")
 
 
 def _to_peer(chat_id: int):
@@ -124,8 +138,7 @@ async def publish_to_staging(
     if telethon_client is None:
         raise RuntimeError("Telethon client required")
 
-    # Resolve staging entity (bot is a member, get_dialogs() cached it at startup)
-    staging_entity = await telethon_client.get_entity(staging_chat_id)
+    staging_entity = await _resolve_entity(telethon_client, staging_chat_id)
     thumb = cover_path or (screenshot_path if screenshot_path.exists() else None)
 
     await on_progress("upload_mp4", None)
