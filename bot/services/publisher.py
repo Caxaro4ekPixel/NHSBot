@@ -125,42 +125,36 @@ async def publish_to_staging(
     thumb = cover_path or (screenshot_path if screenshot_path.exists() else None)
 
     await on_progress("upload_mp4", None)
-    mp4_msg = await asyncio.wait_for(
-        bot.send_video(
-            chat_id=staging_chat_id,
-            video=FSInputFile(mp4_path),
-            caption=build_group_mp4_caption(release, episode),
-            thumbnail=FSInputFile(thumb) if thumb else None,
-            supports_streaming=True,
-            parse_mode=ParseMode.HTML,
-        ),
-        timeout=3600,
+    mp4_msg = await bot.send_video(
+        chat_id=staging_chat_id,
+        video=FSInputFile(mp4_path),
+        caption=build_group_mp4_caption(release, episode),
+        thumbnail=FSInputFile(thumb) if thumb else None,
+        supports_streaming=True,
+        parse_mode=ParseMode.HTML,
+        request_timeout=3600,
     )
     logger.info(f"Staging MP4 id={mp4_msg.message_id}")
 
     await on_progress("upload_mkv", None)
-    mkv_msg = await asyncio.wait_for(
-        bot.send_document(
-            chat_id=staging_chat_id,
-            document=FSInputFile(mkv_path),
-            caption=build_group_mkv_caption(release, episode),
-            parse_mode=ParseMode.HTML,
-        ),
-        timeout=3600,
+    mkv_msg = await bot.send_document(
+        chat_id=staging_chat_id,
+        document=FSInputFile(mkv_path),
+        caption=build_group_mkv_caption(release, episode),
+        parse_mode=ParseMode.HTML,
+        request_timeout=3600,
     )
     logger.info(f"Staging MKV id={mkv_msg.message_id}")
 
     staging_channel_msg_id = None
     if screenshot_path.exists():
         await on_progress("upload_channel", None)
-        ch_msg = await asyncio.wait_for(
-            bot.send_photo(
-                chat_id=staging_chat_id,
-                photo=FSInputFile(screenshot_path),
-                caption=build_channel_caption(release, episode, credits, ""),
-                parse_mode=ParseMode.HTML,
-            ),
-            timeout=300,
+        ch_msg = await bot.send_photo(
+            chat_id=staging_chat_id,
+            photo=FSInputFile(screenshot_path),
+            caption=build_channel_caption(release, episode, credits, ""),
+            parse_mode=ParseMode.HTML,
+            request_timeout=300,
         )
         staging_channel_msg_id = ch_msg.message_id
         logger.info(f"Staging channel preview id={ch_msg.message_id}")
