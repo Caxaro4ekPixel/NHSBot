@@ -1,12 +1,12 @@
 import asyncio
-import random
 import re
 from pathlib import Path
 from typing import Optional, Dict, List, Callable, Awaitable
 
 from aiogram import Bot
+from aiogram.types import FSInputFile
+from aiogram.enums import ParseMode
 from telethon.tl.types import PeerChannel
-from telethon.tl.functions.messages import ForwardMessagesRequest
 from bot.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -23,14 +23,13 @@ ROLE_ORDER = ["TRANSLATOR", "VOICE", "TIMING", "CURATOR", "DESIGNER"]
 
 
 def _hashtag(name: str) -> str:
-    clean = re.sub(r'[^\w\s]', '', name, flags=re.UNICODE)  # strip : - ! ? etc.
+    clean = re.sub(r'[^\w\s]', '', name, flags=re.UNICODE)
     if re.search(r'[а-яА-ЯёЁ]', clean):
         return '#' + re.sub(r'\s+', '', clean)
     return '#' + re.sub(r'\s+', '_', clean.strip())
 
 
 def _group_link(group_id: int, message_id: int, topic_id: Optional[int] = None) -> str:
-    """Build t.me/c/ link to a message in a private group."""
     cid = str(group_id).lstrip('-')
     if cid.startswith('100'):
         cid = cid[3:]
@@ -111,6 +110,7 @@ def build_channel_caption(
 
 
 async def publish_to_staging(
+    bot: Bot,
     staging_chat_id: int,
     release: dict,
     episode: int,
@@ -122,73 +122,64 @@ async def publish_to_staging(
     cover_path: Optional[Path] = None,
     telethon_client=None,
 ) -> Dict[str, Optional[int]]:
-    if telethon_client is None:
-        raise RuntimeError("Telethon client required")
-
-    staging_peer = _to_peer(staging_chat_id)
     thumb = cover_path or (screenshot_path if screenshot_path.exists() else None)
 
     await on_progress("upload_mp4", None)
     mp4_msg = await asyncio.wait_for(
-        telethon_client.send_file(
-            entity=staging_peer,
-            file=str(mp4_path),
+        bot.send_video(
+            chat_id=staging_chat_id,
+            video=FSInputFile(mp4_path),
             caption=build_group_mp4_caption(release, episode),
+            thumbnail=FSInputFile(thumb) if thumb else None,
             supports_streaming=True,
-            thumb=str(thumb) if thumb else None,
-            parse_mode="html",
+            parse_mode=ParseMode.HTML,
         ),
         timeout=3600,
     )
-    logger.info(f"Staging MP4 id={mp4_msg.id}")
+    logger.info(f"Staging MP4 id={mp4_msg.message_id}")
 
     await on_progress("upload_mkv", None)
     mkv_msg = await asyncio.wait_for(
-        telethon_client.send_file(
-            entity=staging_peer,
-            file=str(mkv_path),
+        bot.send_document(
+            chat_id=staging_chat_id,
+            document=FSInputFile(mkv_path),
             caption=build_group_mkv_caption(release, episode),
-            force_document=True,
-            parse_mode="html",
+            parse_mode=ParseMode.HTML,
         ),
         timeout=3600,
     )
-    logger.info(f"Staging MKV id={mkv_msg.id}")
+    logger.info(f"Staging MKV id={mkv_msg.message_id}")
 
     staging_channel_msg_id = None
     if screenshot_path.exists():
         await on_progress("upload_channel", None)
-        ch_caption = build_channel_caption(release, episode, credits, "")
         ch_msg = await asyncio.wait_for(
-            telethon_client.send_file(
-                entity=staging_peer,
-                file=str(screenshot_path),
-                caption=ch_caption,
-                parse_mode="html",
+            bot.send_photo(
+                chat_id=staging_chat_id,
+                photo=FSInputFile(screenshot_path),
+                caption=build_channel_caption(release, episode, credits, ""),
+                parse_mode=ParseMode.HTML,
             ),
             timeout=300,
         )
-        staging_channel_msg_id = ch_msg.id
-        logger.info(f"Staging channel preview id={ch_msg.id}")
+        staging_channel_msg_id = ch_msg.message_id
+        logger.info(f"Staging channel preview id={ch_msg.message_id}")
 
     return {
-        "staging_mp4_id": mp4_msg.id,
-        "staging_mkv_id": mkv_msg.id,
+        "staging_mp4_id": mp4_msg.message_id,
+        "staging_mkv_id": mkv_msg.message_id,
         "staging_channel_msg_id": staging_channel_msg_id,
     }
 
 
 async def publish_from_staging(
+    bot: Bot,
     staging_chat_id: int,
     staging_post: dict,
     release: dict,
     credits: Dict[str, List[dict]],
     telethon_client=None,
 ) -> Dict[str, Optional[int]]:
-    if telethon_client is None:
-        raise RuntimeError("Telethon client required")
-
-    staging_peer = _to_peer(staging_chat_id)
     group_id = staging_post["group_id"]
     topic_id = staging_post["topic_id"]
     channel_id = staging_post["channel_id"]
@@ -198,50 +189,36 @@ async def publish_from_staging(
         "group_mp4_id": None, "group_mkv_id": None, "channel_msg_id": None,
     }
 
-    from_input = await telethon_client.get_input_entity(staging_peer)
-    to_group_input = await telethon_client.get_input_entity(_to_peer(group_id))
-
-    fwd_mp4 = await telethon_client(ForwardMessagesRequest(
-        from_peer=from_input,
-        id=[staging_post["staging_mp4_id"]],
-        to_peer=to_group_input,
-        top_msg_id=topic_id,
-        random_id=[random.randint(0, 2**63)],
-    ))
-    mp4_id = fwd_mp4.updates[0].id if hasattr(fwd_mp4.updates[0], "id") else None
-    if mp4_id is None:
-        for upd in fwd_mp4.updates:
-            if hasattr(upd, "message") and hasattr(upd.message, "id"):
-                mp4_id = upd.message.id
-                break
+    fwd_mp4 = await bot.copy_message(
+        chat_id=group_id,
+        from_chat_id=staging_chat_id,
+        message_id=staging_post["staging_mp4_id"],
+        message_thread_id=topic_id,
+    )
+    mp4_id = fwd_mp4.message_id
     result["group_mp4_id"] = mp4_id
-    logger.info(f"Forwarded MP4 to group={group_id} topic={topic_id} msg_id={mp4_id}")
+    logger.info(f"Copied MP4 to group={group_id} topic={topic_id} msg_id={mp4_id}")
 
-    await telethon_client(ForwardMessagesRequest(
-        from_peer=from_input,
-        id=[staging_post["staging_mkv_id"]],
-        to_peer=to_group_input,
-        top_msg_id=topic_id,
-        random_id=[random.randint(0, 2**63)],
-    ))
-    logger.info(f"Forwarded MKV to group={group_id} topic={topic_id}")
+    fwd_mkv = await bot.copy_message(
+        chat_id=group_id,
+        from_chat_id=staging_chat_id,
+        message_id=staging_post["staging_mkv_id"],
+        message_thread_id=topic_id,
+    )
+    result["group_mkv_id"] = fwd_mkv.message_id
+    logger.info(f"Copied MKV to group={group_id} topic={topic_id}")
 
     if channel_id and staging_post.get("staging_channel_msg_id") and mp4_id:
         mp4_url = _group_link(group_id, mp4_id, topic_id)
         ch_caption = build_channel_caption(release, episode, credits, mp4_url)
-        staging_ch_msg = await telethon_client.get_messages(
-            staging_peer, ids=staging_post["staging_channel_msg_id"]
+        ch_msg = await bot.copy_message(
+            chat_id=channel_id,
+            from_chat_id=staging_chat_id,
+            message_id=staging_post["staging_channel_msg_id"],
+            caption=ch_caption,
+            parse_mode=ParseMode.HTML,
         )
-        ch_msg = await asyncio.wait_for(
-            telethon_client.send_file(
-                entity=_to_peer(channel_id),
-                file=staging_ch_msg.media,
-                caption=ch_caption,
-                parse_mode="html",
-            ),
-            timeout=300,
-        )
-        result["channel_msg_id"] = ch_msg.id
-        logger.info(f"Channel post sent: channel={channel_id} msg_id={ch_msg.id}")
+        result["channel_msg_id"] = ch_msg.message_id
+        logger.info(f"Channel post sent: channel={channel_id} msg_id={ch_msg.message_id}")
 
     return result

@@ -605,11 +605,11 @@ async def on_staging_publish(cb: CallbackQuery):
         credits = await get_release_credits(staging_post["release_id"])
 
         post_ids = await publish_from_staging(
+            bot=bot,
             staging_chat_id=STAGING_CHAT_ID,
             staging_post=staging_post,
             release=release,
             credits=credits,
-            telethon_client=telethon_client,
         )
 
         await save_release_post(
@@ -1035,6 +1035,7 @@ async def cmd_pub(message: Message) -> None:
         ep_cover = cover_path(release["id"], episode)
 
         staging_ids = await publish_to_staging(
+            bot=bot,
             staging_chat_id=STAGING_CHAT_ID,
             release=release,
             episode=episode,
@@ -1044,7 +1045,6 @@ async def cmd_pub(message: Message) -> None:
             credits=credits,
             cover_path=ep_cover if ep_cover.exists() else None,
             on_progress=on_progress,
-            telethon_client=telethon_client,
         )
 
         staging_post_id = await save_staging_post(
