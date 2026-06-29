@@ -53,7 +53,7 @@ dp = Dispatcher()
 dp.include_router(router)
 
 if LOCAL_API_URL:
-    _api_server = TelegramAPIServer.from_base(LOCAL_API_URL, is_local=False)
+    _api_server = TelegramAPIServer.from_base(LOCAL_API_URL, is_local=True)
 else:
     _api_server = None
 

@@ -27,6 +27,8 @@ services:
       TELEGRAM_LOCAL: 1
     volumes:
       - localapi_data:/var/lib/telegram-bot-api
+      - shared_tmp:/tmp
+      - covers_data:/app/covers:ro
     networks:
       - reales_network
     restart: unless-stopped
@@ -61,6 +63,7 @@ services:
       - ./.env:/app/.env
       - localapi_data:/var/lib/telegram-bot-api:ro
       - covers_data:/app/covers
+      - shared_tmp:/tmp
     entrypoint: ["/app/docker-entrypoint.sh"]
     command: ["python", "main.py"]
     restart: unless-stopped
@@ -105,5 +108,6 @@ volumes:
   postgres_data:
   localapi_data:
   covers_data:
+  shared_tmp:
 
 
