@@ -240,7 +240,8 @@ async def convert_mp4(mkv: Path, output: Path, on_progress: ProgressCb) -> None:
     await _run_with_progress([
         "ffmpeg", "-y", "-progress", "pipe:1",
         "-i", str(mkv),
-        "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+        "-c:v", "h264", "-profile:v", "high", "-preset", "slow",
+        "-level", "4.1", "-tune", "animation", "-pix_fmt", "yuv420p", "-crf", "15",
         "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
         "-c:a", "copy",
         "-movflags", "+faststart",
