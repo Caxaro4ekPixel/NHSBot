@@ -39,5 +39,5 @@ prod-restart:
 	@echo "✅ Bot and RSS restarted"
 
 prod-deploy:
-	@ssh root@78.40.209.76 "cd $(PROD_DIR) && git pull && docker compose up --build -d bot rss"
+	@ssh root@78.40.209.76 "cd $(PROD_DIR) && git pull && docker compose up -d localapi && docker compose up --build -d bot rss"
 	@echo "✅ Deployed"
