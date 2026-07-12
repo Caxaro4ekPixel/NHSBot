@@ -228,6 +228,15 @@ async def send_to_telegram(
         logger.warning(f"⚠️ No torrents were sent for {anime_name} ep{episode} (expected {len(REQUIRED_QUALITIES)})")
 
 
+def title_score(entry_norm: str, name_norm: str) -> float:
+    score = similarity(entry_norm, name_norm)
+    if score >= SIM_THRESHOLD:
+        return score
+    name_words = len(name_norm.split())
+    entry_prefix = " ".join(entry_norm.split()[:name_words])
+    return similarity(entry_prefix, name_norm)
+
+
 def find_best_match(entry_title: str, catalog: List[dict]) -> Optional[dict]:
     best = None
     best_score = 0.0
@@ -241,10 +250,10 @@ def find_best_match(entry_title: str, catalog: List[dict]) -> Optional[dict]:
         name_norm = normalize_title(name)
 
         entry_norm_with_prefix = normalize_title(entry_title, prefix)
-        score_with_prefix = similarity(entry_norm_with_prefix, name_norm)
+        score = title_score(entry_norm_with_prefix, name_norm)
 
-        if score_with_prefix >= SIM_THRESHOLD and score_with_prefix > best_score:
-            best_score = score_with_prefix
+        if score >= SIM_THRESHOLD and score > best_score:
+            best_score = score
             best = item
 
     if best:
@@ -257,10 +266,10 @@ def find_best_match(entry_title: str, catalog: List[dict]) -> Optional[dict]:
 
         name_norm = normalize_title(name)
         entry_norm_without = normalize_title(entry_title)
-        score_without = similarity(entry_norm_without, name_norm)
+        score = title_score(entry_norm_without, name_norm)
 
-        if score_without >= SIM_THRESHOLD and score_without > best_score:
-            best_score = score_without
+        if score >= SIM_THRESHOLD and score > best_score:
+            best_score = score
             best = item
 
     return best if (best and best_score >= SIM_THRESHOLD) else None
