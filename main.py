@@ -33,6 +33,7 @@ from bot.repositories.publishing import (
     get_latest_topic_files, save_release_post, get_release_credits,
     get_topic_for_release_in_group, set_release_tags, set_release_file_prefix,
     save_staging_post, get_staging_post, mark_staging_published,
+    set_release_rss_name,
 )
 from bot.services.media_processor import process_episode, STEPS, _detect_file_type
 from bot.services.yadisk import extract_cloud_url, get_resource_info
@@ -1104,6 +1105,30 @@ async def cmd_settags(message: Message) -> None:
         await message.reply(f"❌ Релиз {release_id} не найден.")
 
 
+@router.message(Command("setrssname"))
+async def cmd_setrssname(message: Message) -> None:
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.reply(
+            "Использование: /setrssname <code>release_id</code> <code>название</code>\n"
+            "Пример: /setrssname 62001 Sparks of Tomorrow\n"
+            "Чтобы сбросить: /setrssname <code>release_id</code> -"
+        )
+        return
+    release_id = int(parts[1])
+    rss_name = parts[2].strip() if len(parts) > 2 else None
+    if rss_name == "-":
+        rss_name = None
+    ok = await set_release_rss_name(release_id, rss_name)
+    if ok:
+        if rss_name:
+            await message.reply(f"✅ RSS-имя релиза {release_id} задано: <code>{rss_name}</code>")
+        else:
+            await message.reply(f"✅ RSS-имя релиза {release_id} сброшено (используется name)")
+    else:
+        await message.reply(f"❌ Релиз {release_id} не найден.")
+
+
 @router.message(Command("setfilename"))
 async def cmd_setfilename(message: Message) -> None:
     parts = (message.text or "").split(maxsplit=2)
@@ -1135,6 +1160,7 @@ async def cmd_help(message: Message) -> None:
         "• <code>/release_add &lt;shikimori_url&gt;</code> — добавить аниме из Shikimori\n"
         "• <code>/settags &lt;release_id&gt; &lt;#тег1 #тег2&gt;</code> — задать кастомные теги для постов\n"
         "• <code>/setfilename &lt;release_id&gt; &lt;имя&gt;</code> — имя файла MKV/MP4 (пример: <code>NHS_HaruNoMai</code>)\n"
+        "• <code>/setrssname &lt;release_id&gt; &lt;название&gt;</code> — имя для поиска на няшке (если отличается от Shikimori)\n"
         "• <code>/setcover &lt;release_id&gt; &lt;серия&gt;</code> — обложка серии (ответить на фото)\n\n"
 
         "<b>2. Привязка топиков</b>\n"

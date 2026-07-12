@@ -164,6 +164,16 @@ async def mark_staging_published(staging_post_id: int) -> None:
             await session.commit()
 
 
+async def set_release_rss_name(release_id: int, rss_name: Optional[str]) -> bool:
+    async with async_session_maker() as session:
+        release = await session.get(Release, release_id)
+        if not release:
+            return False
+        release.rss_name = rss_name
+        await session.commit()
+        return True
+
+
 async def get_release_credits(release_id: int) -> Dict[str, List[dict]]:
     """Returns {role_uppercase: [{name, channel_url, username}]} for a release."""
     async with async_session_maker() as session:

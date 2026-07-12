@@ -233,32 +233,32 @@ def find_best_match(entry_title: str, catalog: List[dict]) -> Optional[dict]:
     best_score = 0.0
 
     for item in catalog:
-        name = item.get("name", "")
+        name = item.get("rss_name") or item.get("name", "")
         if not name:
             continue
-        
+
         prefix = item.get("search_prefix", "[Erai-raws]")
         name_norm = normalize_title(name)
-        
+
         entry_norm_with_prefix = normalize_title(entry_title, prefix)
         score_with_prefix = similarity(entry_norm_with_prefix, name_norm)
-        
+
         if score_with_prefix >= SIM_THRESHOLD and score_with_prefix > best_score:
             best_score = score_with_prefix
             best = item
-    
+
     if best:
         return best
-    
+
     for item in catalog:
-        name = item.get("name", "")
+        name = item.get("rss_name") or item.get("name", "")
         if not name:
             continue
-        
+
         name_norm = normalize_title(name)
         entry_norm_without = normalize_title(entry_title)
         score_without = similarity(entry_norm_without, name_norm)
-        
+
         if score_without >= SIM_THRESHOLD and score_without > best_score:
             best_score = score_without
             best = item
@@ -286,13 +286,12 @@ async def process_feed(catalog: List[dict], http) -> None:
         
         search_prefix = anime.get("search_prefix") or ""
         search_prefix = search_prefix.strip() if search_prefix else ""
-        name = anime.get("name") or ""
-        name = name.strip() if name else ""
-        
+        name = (anime.get("rss_name") or anime.get("name") or "").strip()
+
         if not name:
             logger.warning(f"Skipping anime ID {anime_id}: no name")
             continue
-        
+
         if search_prefix:
             search_query = f"{search_prefix} {name}"
         else:

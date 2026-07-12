@@ -36,6 +36,7 @@ class Release(Base):
     released_on = Column(String)
     chat_id = Column(BigInteger, nullable=True)
     search_prefix = Column(String, default="[Erai-raws]")
+    rss_name = Column(String, nullable=True)
     custom_tags = Column(String, nullable=True)
     file_prefix = Column(String, nullable=True)
     is_completed = Column(Boolean, default=False)
@@ -66,6 +67,7 @@ class Release(Base):
             "released_on": self.released_on,
             "chat_id": self.chat_id,
             "search_prefix": self.search_prefix,
+            "rss_name": self.rss_name,
             "custom_tags": self.custom_tags,
             "file_prefix": self.file_prefix,
             "is_completed": self.is_completed,
