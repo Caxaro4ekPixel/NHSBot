@@ -37,7 +37,7 @@ bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 RSS_BASE_URL = "https://nyaa.si/?page=rss&c=1_2"
 
 SIM_THRESHOLD = 0.70
-REQUIRED_QUALITIES = {480, 1080}
+REQUIRED_QUALITIES = {1080}
 POLL_INTERVAL = 360
 
 
